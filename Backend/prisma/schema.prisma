@@ -1,0 +1,530 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis]
+}
+
+enum UserStatus {
+  ACTIVE
+  PENDING
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum UserRoleType {
+  DONOR
+  RECIPIENT
+  ORGANIZATION_ADMIN
+  MODERATOR
+  PLATFORM_ADMIN
+}
+
+enum BloodGroup {
+  O_NEGATIVE
+  O_POSITIVE
+  A_NEGATIVE
+  A_POSITIVE
+  B_NEGATIVE
+  B_POSITIVE
+  AB_NEGATIVE
+  AB_POSITIVE
+}
+
+enum VerificationStatus {
+  NOT_SUBMITTED
+  PENDING
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum SharingMode {
+  NEVER
+  WITH_CONSENT
+  AUTHORIZED_REQUESTS
+}
+
+enum RequestUrgency {
+  NORMAL
+  URGENT
+  CRITICAL
+}
+
+enum BloodRequestStatus {
+  OPEN
+  IN_PROGRESS
+  FULFILLED
+  CANCELLED
+  EXPIRED
+}
+
+enum DonorResponseStatus {
+  WILLING
+  DECLINED
+}
+
+enum RecipientResponseDecision {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum ConsentScope {
+  PHONE
+  EMAIL
+  CONTACT_DETAILS
+}
+
+enum NotificationType {
+  BLOOD_REQUEST
+  REQUEST_UPDATE
+  VERIFICATION_UPDATE
+  SYSTEM
+  SECURITY
+}
+
+enum UrgentNotificationDeliveryStatus {
+  PENDING
+  PROCESSING
+  DELIVERED
+  FAILED
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum MembershipRole {
+  MEMBER
+  VERIFIER
+  REQUEST_MANAGER
+  ORGANIZATION_ADMIN
+}
+
+enum MembershipStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+  REMOVED
+}
+
+enum AbuseReportStatus {
+  OPEN
+  UNDER_REVIEW
+  RESOLVED
+  DISMISSED
+}
+
+enum AbuseTargetType {
+  USER
+  BLOOD_REQUEST
+  ORGANIZATION
+}
+
+model User {
+  urgentNotificationDeliveries UrgentNotificationDelivery[] @relation("UrgentNotificationDonor")
+  id                           String                       @id @default(uuid()) @db.Uuid
+  email                        String                       @unique @db.VarChar(254)
+  passwordHash                 String                       @map("password_hash") @db.VarChar(255)
+  status                       UserStatus                   @default(PENDING)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  roles                 UserRole[]
+  donorProfile          DonorProfile?
+  contactPreference     ContactPreference?
+  bloodRequests         BloodRequest[]           @relation("RequestRequester")
+  changedRequestHistory RequestStatusHistory[]   @relation("HistoryChangedBy")
+  grantedConsents       ContactConsent[]         @relation("ConsentGrantedBy")
+  notifications         Notification[]
+  pushSubscriptions     PushSubscription[]
+  reviewedVerifications VerificationRecord[]     @relation("VerificationReviewer")
+  abuseReportsReported  AbuseReport[]            @relation("ReportReporter")
+  memberships           OrganizationMembership[]
+  auditLogs             AuditLog[]               @relation("AuditActor")
+  donorResponses        DonorResponse[]          @relation("ResponseDonor")
+  refreshTokens         RefreshToken[]
+  passwordResetTokens   PasswordResetToken[]
+
+  @@index([status])
+  @@map("users")
+}
+
+model UserRole {
+  id             String       @id @default(uuid()) @db.Uuid
+  userId         String       @map("user_id") @db.Uuid
+  role           UserRoleType
+  organizationId String?      @map("organization_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role, organizationId])
+  @@index([organizationId, role])
+  @@map("user_roles")
+}
+
+model DonorProfile {
+  userId                     String             @id @map("user_id") @db.Uuid
+  bloodGroup                 BloodGroup         @map("blood_group")
+  dateOfBirth                DateTime           @map("date_of_birth") @db.Date
+  weightKg                   Decimal            @map("weight_kg") @db.Decimal(5, 2)
+  city                       String             @db.VarChar(120)
+  lastDonationDate           DateTime?          @map("last_donation_date") @db.Date
+  isAvailable                Boolean            @default(false) @map("is_available")
+  urgentNotificationsEnabled Boolean            @default(false) @map("urgent_notifications_enabled")
+  verificationStatus         VerificationStatus @default(NOT_SUBMITTED) @map("verification_status")
+  locationId                 String?            @map("location_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  location            Location?            @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  contactConsents     ContactConsent[]
+  verificationRecords VerificationRecord[]
+
+  @@index([bloodGroup, isAvailable])
+  @@index([city, bloodGroup])
+  @@index([verificationStatus, isAvailable])
+  @@map("donor_profiles")
+}
+
+model ContactPreference {
+  userId         String      @id @map("user_id") @db.Uuid
+  sharingMode    SharingMode @default(WITH_CONSENT) @map("sharing_mode")
+  consentVersion String      @map("consent_version") @db.VarChar(50)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("contact_preferences")
+}
+
+model Location {
+  id      String  @id @default(uuid()) @db.Uuid
+  city    String  @db.VarChar(120)
+  region  String? @db.VarChar(120)
+  country String  @default("Pakistan") @db.VarChar(100)
+
+  // PostGIS geography will be added through a SQL migration.
+  // Keep exact residential coordinates private.
+  geography Unsupported("geography(Point, 4326)")?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  donorProfiles DonorProfile[]
+  bloodRequests BloodRequest[]
+
+  @@index([city, region])
+  @@map("locations")
+}
+
+model BloodRequest {
+  urgentNotificationDeliveries UrgentNotificationDelivery[]
+  id                           String                       @id @default(uuid()) @db.Uuid
+  requesterId                  String                       @map("requester_id") @db.Uuid
+  idempotencyKey               String?                      @map("idempotency_key") @db.VarChar(128)
+  requestPayloadHash           String?                      @map("request_payload_hash") @db.VarChar(64)
+  bloodGroup                   BloodGroup                   @map("blood_group")
+  unitsNeeded                  Int                          @map("units_needed")
+  hospitalName                 String                       @map("hospital_name") @db.VarChar(200)
+  city                         String                       @db.VarChar(120)
+  locationId                   String?                      @map("location_id") @db.Uuid
+  urgency                      RequestUrgency               @default(NORMAL)
+  contactReference             String?                      @map("contact_reference") @db.VarChar(255)
+  status                       BloodRequestStatus           @default(OPEN)
+  expiresAt                    DateTime?                    @map("expires_at") @db.Timestamptz(6)
+  donorResponses               DonorResponse[]
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  closedAt  DateTime? @map("closed_at") @db.Timestamptz(6)
+
+  requester       User                   @relation("RequestRequester", fields: [requesterId], references: [id], onDelete: Restrict)
+  location        Location?              @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  statusHistory   RequestStatusHistory[]
+  contactConsents ContactConsent[]
+
+  @@unique([requesterId, idempotencyKey])
+  @@index([status, urgency, createdAt])
+  @@index([bloodGroup, status, city])
+  @@index([requesterId, status])
+  @@map("blood_requests")
+}
+
+model RequestStatusHistory {
+  id        String              @id @default(uuid()) @db.Uuid
+  requestId String              @map("request_id") @db.Uuid
+  changedBy String?             @map("changed_by") @db.Uuid
+  oldStatus BloodRequestStatus? @map("old_status")
+  newStatus BloodRequestStatus  @map("new_status")
+  reason    String?             @db.VarChar(500)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  request BloodRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  actor   User?        @relation("HistoryChangedBy", fields: [changedBy], references: [id], onDelete: SetNull)
+
+  @@index([requestId, createdAt])
+  @@map("request_status_history")
+}
+
+model ContactConsent {
+  id        String       @id @default(uuid()) @db.Uuid
+  donorId   String       @map("donor_id") @db.Uuid
+  requestId String?      @map("request_id") @db.Uuid
+  grantedBy String       @map("granted_by") @db.Uuid
+  scope     ConsentScope
+
+  grantedAt DateTime  @default(now()) @map("granted_at") @db.Timestamptz(6)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+
+  donor   DonorProfile  @relation(fields: [donorId], references: [userId], onDelete: Cascade)
+  request BloodRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  grantor User          @relation("ConsentGrantedBy", fields: [grantedBy], references: [id], onDelete: Restrict)
+
+  @@index([donorId, requestId, scope])
+  @@index([grantedAt, revokedAt])
+  @@map("contact_consents")
+}
+
+model Notification {
+  id               String           @id @default(uuid()) @db.Uuid
+  userId           String           @map("user_id") @db.Uuid
+  type             NotificationType
+  payloadReference String?          @map("payload_reference") @db.VarChar(255)
+  readAt           DateTime?        @map("read_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+model PushSubscription {
+  id                 String    @id @default(uuid()) @db.Uuid
+  userId             String    @map("user_id") @db.Uuid
+  endpoint           String    @unique @db.Text
+  encryptedP256dhKey String    @map("encrypted_p256dh_key") @db.Text
+  encryptedAuthKey   String    @map("encrypted_auth_key") @db.Text
+  revokedAt          DateTime? @map("revoked_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  deliveries PushDelivery[]
+
+  @@map("push_subscriptions")
+}
+
+model AbuseReport {
+  id          String            @id @default(uuid()) @db.Uuid
+  reporterId  String            @map("reporter_id") @db.Uuid
+  targetType  AbuseTargetType   @map("target_type")
+  targetId    String            @map("target_id") @db.Uuid
+  category    String            @db.VarChar(100)
+  description String?           @db.VarChar(2000)
+  status      AbuseReportStatus @default(OPEN)
+  resolution  String?           @db.VarChar(1000)
+
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  resolvedAt DateTime? @map("resolved_at") @db.Timestamptz(6)
+
+  reporter User @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Restrict)
+
+  @@index([status, createdAt])
+  @@index([targetType, targetId])
+  @@map("abuse_reports")
+}
+
+model VerificationRecord {
+  id         String             @id @default(uuid()) @db.Uuid
+  donorId    String             @map("donor_id") @db.Uuid
+  reviewerId String?            @map("reviewer_id") @db.Uuid
+  status     VerificationStatus
+  reason     String?            @db.VarChar(1000)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  donor    DonorProfile @relation(fields: [donorId], references: [userId], onDelete: Cascade)
+  reviewer User?        @relation("VerificationReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+
+  @@index([donorId, createdAt])
+  @@index([status, createdAt])
+  @@map("verification_records")
+}
+
+model Organization {
+  id     String             @id @default(uuid()) @db.Uuid
+  name   String             @db.VarChar(200)
+  slug   String             @unique @db.VarChar(120)
+  status OrganizationStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  roles       UserRole[]
+  memberships OrganizationMembership[]
+  auditLogs   AuditLog[]
+
+  @@index([status])
+  @@map("organizations")
+}
+
+model OrganizationMembership {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @map("organization_id") @db.Uuid
+  userId         String           @map("user_id") @db.Uuid
+  role           MembershipRole
+  status         MembershipStatus @default(INVITED)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId, status])
+  @@index([organizationId, role, status])
+  @@map("organization_memberships")
+}
+
+model AuditLog {
+  id             String  @id @default(uuid()) @db.Uuid
+  actorId        String? @map("actor_id") @db.Uuid
+  organizationId String? @map("organization_id") @db.Uuid
+  action         String  @db.VarChar(150)
+  targetType     String? @map("target_type") @db.VarChar(100)
+  targetId       String? @map("target_id") @db.VarChar(100)
+  metadata       Json?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  actor        User?         @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([organizationId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("audit_logs")
+}
+
+model DonorResponse {
+  id        String              @id @default(uuid()) @db.Uuid
+  requestId String              @map("request_id") @db.Uuid
+  donorId   String              @map("donor_id") @db.Uuid
+  status    DonorResponseStatus
+  message   String?             @db.VarChar(500)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  request             BloodRequest              @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  donor               User                      @relation("ResponseDonor", fields: [donorId], references: [id], onDelete: Restrict)
+  recipientDecision   RecipientResponseDecision @default(PENDING) @map("recipient_decision")
+  recipientDecisionAt DateTime?                 @map("recipient_decision_at") @db.Timestamptz(6)
+
+  @@unique([requestId, donorId])
+  @@index([donorId, status, createdAt])
+  @@index([requestId, status, createdAt])
+  @@map("donor_responses")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  tokenHash String    @unique @map("token_hash") @db.VarChar(64)
+  userId    String    @map("user_id") @db.Uuid
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model PasswordResetToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  tokenHash  String    @unique @map("token_hash") @db.VarChar(64)
+  userId     String    @map("user_id") @db.Uuid
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, consumedAt])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model UrgentNotificationDelivery {
+  id            String                           @id @default(uuid()) @db.Uuid
+  requestId     String                           @map("request_id") @db.Uuid
+  donorId       String                           @map("donor_id") @db.Uuid
+  status        UrgentNotificationDeliveryStatus @default(PENDING)
+  attempts      Int                              @default(0)
+  lastAttemptAt DateTime?                        @map("last_attempt_at") @db.Timestamptz(6)
+  deliveredAt   DateTime?                        @map("delivered_at") @db.Timestamptz(6)
+  lastError     String?                          @map("last_error") @db.VarChar(1000)
+  createdAt     DateTime                         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime                         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  request BloodRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  donor   User         @relation("UrgentNotificationDonor", fields: [donorId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, donorId])
+  @@index([status, createdAt])
+  @@map("urgent_notification_deliveries")
+}
+
+enum PushDeliveryStatus {
+  PENDING
+  PROCESSING
+  DELIVERED
+  FAILED
+}
+
+model PushDelivery {
+  id             String            @id @default(uuid()) @db.Uuid
+  subscriptionId String            @map("subscription_id") @db.Uuid
+  payload        Json
+  status         PushDeliveryStatus @default(PENDING)
+  attempts       Int               @default(0)
+  nextAttemptAt  DateTime          @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+  lastAttemptAt  DateTime?         @map("last_attempt_at") @db.Timestamptz(6)
+  deliveredAt    DateTime?         @map("delivered_at") @db.Timestamptz(6)
+  lastError      String?           @map("last_error") @db.VarChar(1000)
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  subscription PushSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([subscriptionId, createdAt])
+  @@map("push_deliveries")
+}
