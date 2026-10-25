@@ -4,7 +4,7 @@
     "private": true,
     "description": "Blood Donation PWA backend API built with NestJS",
     "scripts": {
-        "build": "nest build",
+        "build": "prisma generate && nest build",
         "start": "node dist/main.js",
         "start:dev": "nest start --watch",
         "start:debug": "nest start --debug --watch",
